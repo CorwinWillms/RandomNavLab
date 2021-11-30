@@ -11,7 +11,6 @@ from action_msgs.msg import GoalStatus
 from nav_msgs.msg import OccupancyGrid
 from jmu_ros2_util import map_utils, transformations
 
-
 """
 repeat forever:
 
