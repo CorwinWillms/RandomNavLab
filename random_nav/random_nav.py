@@ -43,21 +43,31 @@ class RandomNavNode(rclpy.node.Node):
         self.ac = ActionClient(self, NavigateToPose, '/navigate_to_pose')
 
         self.goal = NavigateToPose.Goal()
+        self.goal.pose.header.frame_id = 'map'  # SEEMS TO BE IGNORED!
+
+    def send_goal(self):
         self.get_logger().info("WAITING FOR NAVIGATION SERVER...")
         self.ac.wait_for_server()
         self.get_logger().info("NAVIGATION SERVER AVAILABLE...")
-        
 
-
-    def send_goal(self):
-        self.goal.pose.header.frame_id = 'map'  # SEEMS TO BE IGNORED!
+        free = "unknown"
         if self.map is None: 
-            x = np.random.randint(0.0, 6)
-            y = np.random.randint(0.0, 6)
+            x = 0
+            y = 0
             self.get_logger().info("map is none")
         else:
-            x = np.random.randint(0.0, self.map.width)
-            y = np.random.randint(0.0, self.map.height)
+            while free != "free":
+                x = np.random.rand() * (self.map.width * self.map.resolution) + self.map.origin_x
+                y = np.random.rand() * (self.map.height * self.map.resolution) + self.map.origin_y
+                val = self.map.get_cell(x, y)
+                if val == 100:
+                    free = "occupied"                        
+                elif val == 0:
+                    free = "free"
+                else:
+                    free = "unknown"
+                self.get_logger().info("HEY! Map position ({:.2f}, {:.2f}) is {}".format(x, y, free))
+        
 
         self.goal.pose.pose.position.x = float(x) #random num in width
         self.goal.pose.pose.position.y = float(y) #random num in height
@@ -71,11 +81,13 @@ class RandomNavNode(rclpy.node.Node):
 
         self.timeout = 10
 
-        
         self.get_logger().info("SENDING GOAL TO NAVIGATION SERVER...")
         self.start_time = time.time()
 
         self.cancel_future = None
+
+        self.is_done = False
+
         self.goal_future = self.ac.send_goal_async(self.goal)
 
         self.create_timer(.1, self.timer_callback)
@@ -86,33 +98,38 @@ class RandomNavNode(rclpy.node.Node):
 
     def timer_callback(self):
         """ Periodically check in on the progress of navigation. """
+
+        if self.map is None:
+            return
+            
         if not self.goal_future.done():
             self.get_logger().info("NAVIGATION GOAL NOT YET ACCEPTED")
+            self.nav_done = False
 
         elif self.cancel_future is not None:  # We've cancelled and are waiting for ack.
             if self.cancel_future.done():
-                self.future_event.set_result(None)
-                self.get_logger().info("EXITING!")
+                # self.future_event.set_result(None)
+                self.nav_done = True
 
         else:
 
             if self.goal_future.result().status == GoalStatus.STATUS_SUCCEEDED:
                 self.get_logger().info("NAVIGATION SERVER REPORTS SUCCESS. EXITING!")
                 self.nav_done = True
-                self.future_event.set_result(None)
+                # self.future_event.set_result(None)
 
             if self.goal_future.result().status == GoalStatus.STATUS_ABORTED:
                 self.get_logger().info("NAVIGATION SERVER HAS ABORTED. EXITING!")
                 self.nav_done = True
-                self.future_event.set_result(None)
+                # self.future_event.set_result(None)
 
             elif time.time() - self.start_time > self.timeout:
                 self.get_logger().info("TAKING TOO LONG. CANCELLING GOAL!")
                 self.cancel_future = self.goal_future.result().cancel_goal_async()
-                self.future_event.set_result(None)
-                self.nav_done = True
-        if self.nav_done == True:
-                self.send_goal()
+                # self.future_event.set_result(None)
+            
+        if self.nav_done:
+            self.send_goal()
     
     def map_callback(self, map_msg):
         """Process the map message.  This doesn't really do anything useful, it is
